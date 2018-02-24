@@ -7,242 +7,109 @@
 
 #include <dataflash.h>
 
-//uint16_t DataFlash::FindStores(void)
-//{
-//    uint16_t totalBlocks = 0;
-//    for(uint32_t address = 0; address < byteCount; address += bytesPerBlock)
-//    {
-//        uint8_t fileNumber = ReadByte(address);
-//        if(fileNumber < MAX_STORES)
-//        {
-//            if(!stores[fileNumber].blocks) //first record
-//            {
-//                stores[fileNumber].startAddress = address;
-//            }
-//
-//            stores[fileNumber].blocks++;
-//            totalBlocks++;
-//
-//            lastAddress = address;
-//        }
-//    }
-//
-//    return totalBlocks;
-//}
-//
-//void DataFlash::DisplayStores(void)
-//{
-//    for(uint8_t i = 0; i < MAX_STORES; i++)
-//    {
-//        SerialUSB.print(i);
-//        SerialUSB.print('\t');
-//        SerialUSB.print(stores[i].startAddress);
-//        SerialUSB.print('\t');
-//        SerialUSB.print(stores[i].blocks);
-//        SerialUSB.print('\n');
-//    }
-//}
-//
-//uint16_t DataFlash::EraseStore(uint8_t storeNumber)
-//{
-//    uint16_t deletedBlockCount = 0;
-//    uint32_t address = stores[storeNumber].startAddress;
-//
-//    uint8_t blockStore = ReadByte(address);
-//
-//    while(blockStore == storeNumber)
-//    {
-//        EraseBlock4K(address);
-//        address += bytesPerBlock;
-//        blockStore = ReadByte(address);
-//
-//        deletedBlockCount++;
-//    }
-//
-//    if(deletedBlockCount != stores[storeNumber].blocks) //do some sanity checking here...
-//    {
-//        SerialUSB.print(F("Incorrect delete count: "));
-//        SerialUSB.println((int16_t)(deletedBlockCount - stores[storeNumber].blocks));
-//    }
-//
-//    stores[storeNumber].startAddress = -1;
-//    stores[storeNumber].blocks = 0;
-//
-//    return deletedBlockCount;
-//}
-//
-//uint32_t DataFlash::CreateStore(uint8_t storeNumber)
-//{
-//    uint32_t address = lastAddress;
-//
-//    if(stores[storeNumber].blocks != 0)
-//    {
-//        SerialUSB.println(F("Non-zero blocks in DataFlash::CreateStore()"));
-//        return 0;
-//    }
-//
-//    if(ReadByte(address) != 0xFF)
-//    {
-//        SerialUSB.println(F("Address not free in DataFlash::CreateStore()"));
-//        return 0;
-//    }
-//
-//    stores[storeNumber].startAddress = address;
-//    stores[storeNumber].lastAddress = address;
-//
-//    return address;
-//}
-//
-//uint16_t DataFlash::AddRecord(uint8_t storeNumber, uint8_t* data, uint16_t size) //assumes size less than a page
-//{
-//    if(stores[storeNumber].startAddress >= byteCount)
-//    {
-//        SerialUSB.println(F("Invalid store address in DataFlash::AddRecord()"));
-//        return 0;
-//    }
-//
-//    if(size > bytesPerPage)
-//    {
-//        SerialUSB.println(F("Too much data in DataFlash::AddRecord()"));
-//        return 0;
-//    }
-//
-//    uint16_t bytesWritten = WritePage(stores[storeNumber].lastAddress, data, size);
-//    stores[storeNumber].lastAddress += bytesPerPage;
-//
-//    return bytesWritten;
-//}
-
-TList<Datastore> Flashstore::ListStores(void)
-{
-    return storeList;
-}
-
-TList<Datastore> Flashstore::ReadStoresFromFlash(void)
+uint16_t FlashStoreManager::ReadStoresFromFlash(void)
 {
     storeList.Flush();
     
-    //brute force reads all the stores
-    for(uint32_t address = 0; address < byteCount; address += bytesPerPage)
+    //read the FAT
+    uint16_t maxStores = flash->bytesPerBlock / 8;
+    for(uint16_t index = 0; index < maxStores; index++)
     {
-        uint8_t storeNumber = ReadByte(address);
+        //get start address
+        BufferArray fileInfo(8);
+        flash->ReadBytes(index * 8, &fileInfo[0], fileInfo.GetSize());
         
-        if(storeNumber == 0xff) continue;
+        uint32_t start = -1;
+        memcpy(&fileInfo[0], &start, 4);
         
-        Datastore* currStore = storeList.Find(Datastore(storeNumber));
+        uint32_t end = -1;
+        memcpy(&fileInfo[4], &end, 4);
         
-        if(!currStore)
+        if(start != 0xffffffff)
         {
-            //start a new block
-            currStore = storeList.Add(Datastore(storeNumber));
-            currStore->startAddress = address;
+            storeList.Add(Datastore(index, start, end));
         }
-
-        currStore->nextAddress = address + bytesPerPage;
-        currStore->pages++;
     }
     
-    return storeList;
+    return storeList.GetItemsInContainer();
 }
 
-Datastore* Flashstore::CreateStore(uint8_t number)
+uint32_t FlashStoreManager::Select(uint16_t storeNumber)
 {
-    Datastore* currStore = storeList.Find(Datastore(number));
-    if(currStore) return NULL; //return NULL if it already exists
-    
-    Datastore* last = storeList.GetTail();
-    
-    uint32_t startAddress = last ? last->nextAddress : 0;
-    while(startAddress % bytesPerBlock) {startAddress += bytesPerPage;}
-    
-    return storeList.Add(Datastore(number, startAddress));
+    currStore = storeList.Find(Datastore(storeNumber));
+    if(currStore) return currStore->endAddress - currStore->firstAddress; //available size
+    else return 0;
 }
 
-Datastore* Flashstore::WritePageToCurrentStore(BufferArray buffer)
+uint32_t FlashStoreManager::Write(const BufferArray& buffer)
 {
-    if(buffer.GetSize() > bytesPerPage) return NULL; //limit to one page for now
+    //Datastore* store = storeList.Find(Datastore(storeNumber));
+    if(!currStore) return 0;
     
-    Datastore* currStore = storeList.GetTail();
-    if(!currStore) return NULL;
-    if(currStore->nextAddress >= byteCount) currStore->nextAddress = 0; //wrap around
-
-    buffer[0] = currStore->storeNumber; //first byte always holds storeNumber!!!
-
-//    //printing for debug...
-//    SerialUSB.print(currStore -> nextAddress);
-//    for(uint16_t i = 0; i < buffer.GetSize(); i++)
-//    {
-//        SerialUSB.print(',');
-//        SerialUSB.print(buffer[i], HEX);
-//    }
-//    SerialUSB.print('\n');
-
-    FlashAT25DF641A::WritePage(currStore->nextAddress, &buffer[0], buffer.GetSize());
-
-    currStore->nextAddress += bytesPerPage;
+    uint32_t byteCount = flash->Write(currStore->currAddress, buffer); //somewhere needs to check for overrun...
+    currStore->currAddress += byteCount;
     
-    return currStore;
+    return byteCount;
 }
 
-BufferArray Flashstore::ReadPageFromStore(uint8_t storeNumber, bool rewind) //returns empty buffer when done?
+uint32_t FlashStoreManager::DeleteStore(uint16_t storeNumber)
 {
-    Datastore* store = storeList.Find(storeNumber);
-    if(!store) return BufferArray(); //empty
-    
-    if(rewind) store->Rewind();
-    
-    BufferArray buffer(bytesPerPage);
-    ReadData(store->currAddress, &buffer[0], buffer.GetSize());
-    
-//    SerialUSB.print(store->currAddress);
-//    for(uint16_t i = 0; i < buffer.GetSize(); i++)
-//    {
-//        SerialUSB.print(',');
-//        SerialUSB.print(buffer[i], HEX);
-//    }
-//    SerialUSB.print('\n');
-    
-    if(buffer[0] == storeNumber)
-    {
-        store->currAddress += bytesPerPage;
-        return buffer; //slow to return by value...
-    }
-    
-    else return BufferArray(); //empty buffer if numbers don't match up
-}
-
-uint16_t Flashstore::EraseStore(uint8_t storeNumber)
-{
-    uint16_t deletedPageCount = 0;
+    uint32_t deletedByteCount = 0;
     Datastore* store = storeList.Find(Datastore(storeNumber));
     if(!store)
     {
         SerialUSB.println("Can't find store.");
         return 0;
     }
-    
-    uint32_t address = store->startAddress;
-    uint8_t storeFromData = ReadByte(address);
-    
-    while(storeFromData == storeNumber)
-    {
-        WriteEnable();
-        EraseBlock4K(address);
-        address += bytesPerBlock;
-        storeFromData = ReadByte(address);
-        
-        deletedPageCount += bytesPerBlock / bytesPerPage;
-    }
-    
-    if(deletedPageCount < store->pages) //do some sanity checking here...but since we're deleting by block, they won't be equal
-    {
-        SerialUSB.print(F("Incorrect delete count: "));
-        SerialUSB.println((int16_t)(deletedPageCount - store->pages));
-    }
-    
+
+    deletedByteCount = flash->Erase(store->startAddress, store->size);
+    BufferArray storeInfo(8);
+    for(uint8_t i = 0; i < 8; i++) storeInfo[i] = 0xff;
+    flash->Write(storeNumber * 8, storeInfo);
+
     ReadStoresFromFlash();
-    //storeList.Delete(store);
     
-    return deletedPageCount;
+    return deletedByteCount;
 }
 
+uint32_t FlashStoreManager::CreateStore(uint16_t fileNum, uint32_t sizeReq)
+{
+    //check if file number is valid
+    //first block acts as rudimentary FAT; 8 bytes per store => max file is blocksize / 8
+    uint16_t maxFileNum = flash->bytesPerBlock / 8;
+    if(fileNum > maxFileNum) return 0;
+    
+    //check if file number is available
+    //first refresh list
+    ReadStoresFromFlash();
+    //then check if the number is taken
+    if(storeList.Find(Datastore(fileNum))) return 0;
+    
+    //now find an chunk of unallocated memory
+    //for now, just check if there is memory after the last file (which will help distribute writes, as well)
+    uint32_t firstFreeMem = flash->bytesPerBlock; //first block reserved for "FAT"
+    if(storeList.GetTail()) firstFreeMem = storeList.GetTail()->endAddress + 1;
+    
+    //check for space
+    //make sizeReq integral number of blocks
+    uint16_t blocks = sizeReq / flash->bytesPerBlock;
+    if(sizeReq % flash->bytesPerBlock) blocks++;
+    sizeReq = blocks * flash->bytesPerBlock;
+    
+    if((flash->byteCount - firstFreeMem) < sizeReq) return 0; //could be made a lot smarter...
+    
+    //if we've made it this far, we can make a store
+    //create the FAT entry
+    Datastore newStore(fileNum, firstFreeMem, firstFreeMem + sizeReq);
+    storeList.Add(newStore);
+
+    BufferArray storeInfo(8);
+    memcpy(&storeInfo[0], &newStore.startAddress, 4);
+    memcpy(&storeInfo[4], &newStore.endAddress, 4);
+    flash->Write(fileNum * 8, storeInfo);
+    
+    //erase the relevant memory
+    flash->Erase(newStore.startAddress, sizeReq);
+    
+    return Select(fileNum);
+}

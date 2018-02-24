@@ -52,7 +52,7 @@ IDdata FlashAT25DF641A::Init(void)
     //hard-coded for now...
     bytesPerPage = 256;
     bytesPerBlock = 4096;
-    totalPages = byteCount / bytesPerPage;
+    //totalPages = byteCount / bytesPerPage;
         
     return idData;
 }
@@ -102,7 +102,7 @@ uint16_t FlashAT25DF641A::ReadStatus(void)
 /*
  * it's up to the user to declare data to be the correct size
  */
-uint32_t FlashAT25DF641A::ReadData(uint32_t address, uint8_t* data, uint32_t count)
+uint32_t FlashAT25DF641A::ReadBytes(uint32_t address, uint8_t* data, uint32_t count)
 {
     if(address >= byteCount) return 0; //basic check for address range
     
@@ -122,21 +122,21 @@ uint32_t FlashAT25DF641A::ReadData(uint32_t address, uint8_t* data, uint32_t cou
     return i;
 }
 
-uint8_t FlashAT25DF641A::ReadByte(uint32_t address)
-{
-    if(address >= byteCount) return 0; //basic check for address range
-    
-    Select();
-    SendCommand(CMD_READ_DATA);
-    SendAddress(address);
-    if(CMD_READ_DATA == 0x0b) SendCommand(0x0); //dummy bits for fast read
-    
-    uint8_t b = spi->transfer(0x0);
-    
-    Deselect();
-    
-    return b;
-}
+//uint8_t FlashAT25DF641A::ReadByte(uint32_t address)
+//{
+//    if(address >= byteCount) return 0; //basic check for address range
+//
+//    Select();
+//    SendCommand(CMD_READ_DATA);
+//    SendAddress(address);
+//    if(CMD_READ_DATA == 0x0b) SendCommand(0x0); //dummy bits for fast read
+//
+//    uint8_t b = spi->transfer(0x0);
+//
+//    Deselect();
+//
+//    return b;
+//}
 
 uint8_t FlashAT25DF641A::WriteEnable(void)
 {

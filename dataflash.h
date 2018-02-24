@@ -9,20 +9,7 @@
 #define dataflash_h
 
 #include <flash.h>
-
-#include <TArray.h>
 #include <TList.h>
-
-#define BufferArray TArray<uint8_t>
-
-#define MAX_STORES 16
-
-//not sure I really need this -- why not just a buffer?
-struct Datapage
-{
-    TArray<uint8_t> buffer;
-    Datapage(uint16_t size) : buffer(size) {}
-};
 
 /*
  * A Datastore is essentially a 'file' of data, but since this isn't a file system, per se,
@@ -31,69 +18,60 @@ struct Datapage
 struct Datastore
 {
 protected:
-    uint8_t storeNumber = 0xff;
+    uint16_t storeNumber = 0xffff;
     uint32_t startAddress = -1;
-    uint32_t nextAddress = 0; //address of NEXT page of store (first free page)
-    uint32_t currAddress = 0; //for maintaining a pointer during reads
-    uint16_t pages = 0;
+    uint32_t endAddress = -1; //either last byte or last byte + 1...tbd
+    uint32_t size = 0; //in bytes, since page sizes vary by flash chip...REDUNDANT!!!
+    uint32_t currAddress = -1;
     
 public:
     Datastore(void) : storeNumber(-1) {}
-    Datastore(uint8_t number, uint32_t startAddr = 0)
+    Datastore(uint16_t number) : storeNumber(number) {}
+    Datastore(uint16_t number, uint32_t startAddr, uint32_t endAddr)
     {
         storeNumber = number;
         startAddress = startAddr;
-        nextAddress = startAddr;
-        currAddress = startAddr;
+        endAddress = endAddr;
+        size = endAddr - startAddr + 1;
+        currAddress = startAddress;
     }
  
     String Display(void)
     {
-        String str = String(storeNumber) + '\t' + String(pages) + '\t' + String(startAddress) + '\t' + String(nextAddress) + '\n';
+        String str = String(storeNumber) + '\t' + String(size/1024) + String("kB \t") + String(startAddress) + '\n';
         return str;
     }
     
     bool operator == (const Datastore& store) { return storeNumber == store.storeNumber; }
-    
-    uint32_t Rewind(void) { return currAddress = startAddress; }
-    friend class DataFlash;
-    friend class Flashstore;
+    bool operator > (const Datastore& store) { return startAddress > store.startAddress; }
+
+    friend class FlashStoreManager;
 };
 
-class DataFlash : public FlashAT25DF641A
+class FlashStoreManager// : virtual Flash
 {
 protected:
-//    FlashAT25DF641A flash;
-    TArray<Datastore> stores;
-    uint32_t lastAddress = 0; //this will be the next free address for making the next store
+    Flash* flash = NULL; //pointer to the flash memory -- this let's us swap physical memory more easily than deriving
+    TSList<Datastore> storeList; //note that the "current" store is always the last one -- this is not a file system
+    Datastore* currStore = NULL;
+    
 public:
-    DataFlash(SPIClass* _spi, uint8_t cs) : FlashAT25DF641A(_spi, cs), stores(MAX_STORES) {}
-    uint16_t FindStores(void);
-    void DisplayStores(void);
-    uint16_t EraseStore(uint8_t storeNumber);
-    uint32_t CreateStore(uint8_t storeNumber);
-    uint16_t AddRecord(uint8_t storeNumber, uint8_t* data, uint16_t size);
-};
+    FlashStoreManager(Flash* fl) : flash(fl) {}
+    void Init(void) {} //might be useful someday?
 
-class Flashstore : public FlashAT25DF641A
-{
-protected:
-    TList<Datastore> storeList;
-    //Datastore* currStore = NULL; //not needed, since the current store
+    uint32_t Select(uint16_t storeNumber);
 
-    BufferArray ReadPage(uint32_t address);
-    //uint32_t WritePage(const BufferArray& buffer);
-public:
-    Flashstore(SPIClass* _spi, uint8_t cs) : FlashAT25DF641A(_spi, cs) {}
+    uint16_t ReadStoresFromFlash(void);
+    TListIterator<Datastore> GetStoresIterator(bool refresh)
+    {
+        if(refresh) ReadStoresFromFlash();
+        return TListIterator<Datastore>(storeList);
+    }
     
-    TList<Datastore> ReadStoresFromFlash(void);
-    TList<Datastore> ListStores(void);
+    uint32_t CreateStore(uint16_t fileNum, uint32_t sizeReq);
+    uint32_t DeleteStore(uint16_t);
     
-    Datastore* CreateStore(uint8_t);
-    uint16_t EraseStore(uint8_t storeNumber);
-    
-    BufferArray ReadPageFromStore(uint8_t storeNumber, bool rewind = false); //returns empty buffer when done?
-    Datastore* WritePageToCurrentStore(BufferArray buffer);
+    uint32_t Write(const BufferArray&);
 };
 
 #endif /* dataflash_h */

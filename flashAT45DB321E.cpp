@@ -21,26 +21,11 @@
 //#define CMD_ERASE_CHIP          C7h, 94h, 80h, and 9Ah
 
 #define CMD_READ_ID_DATA    0x9F
-//#define CMD_READ_PROTECTION_STATUS    0x3C
-//
-//#define REG_GLOBAL_UNPROTECT  0x00
-//#define REG_GLOBAL_PROTECT    0x3C
-//
 #define STATUS_RDY      0x80
 
 IDdata FlashAT45DB321E::Init(void)
 {
-    pinMode(chipSelect, OUTPUT);
-    digitalWrite(chipSelect, HIGH);
-    
-    Deselect();
-    
-    //this might not play well with others...
-    spi->setDataMode(SPI_MODE0);
-    spi->setBitOrder(MSBFIRST);
-    spi->setClockDivider(SPI_CLOCK_DIV4); //why slow it down?
-    
-    spi->begin();
+    Flash::Init();
     
     idData = ReadIDdata();
     
@@ -55,7 +40,7 @@ IDdata FlashAT45DB321E::Init(void)
     //hard-coded for now...
     bytesPerPage = 512;
     bytesPerBlock = 4096;
-    totalPages = byteCount / bytesPerPage;
+    //totalPages = byteCount / bytesPerPage;
         
     return idData;
 }
@@ -106,54 +91,7 @@ uint16_t FlashAT45DB321E::ReadStatus(void)
     return status;
 }
 
-uint32_t FlashAT45DB321E::BufferWrite(uint8_t* data, uint16_t count, uint8_t bufferNumber, uint16_t byteAddress)
-{
-    //84h for Buffer 1 or 87h for Buffer 2
-    uint8_t op_code = 0x00;
-    if(bufferNumber == 1) op_code = 0x84;
-    else if(bufferNumber == 2) op_code = 0x87;
-    else return 0;
-    
-    Select();
-    SendCommand(op_code);
-    SendAddress(MakeAddress(0x00, byteAddress)); //writing to buffer, page address is irrelevant
-    
-    uint16_t i = 0;
-    for( ; i < count; i++)
-    {
-        spi->transfer(data[i]);
-    }
-    
-    Deselect();
-    
-    return i;
-}
-
-uint32_t FlashAT45DB321E::WriteThruBuffer(uint8_t* data, uint16_t count, uint8_t bufferNumber,
-                                          uint16_t pageIndex, uint16_t byteAddress)
-{
-    //84h for Buffer 1 or 87h for Buffer 2
-    uint8_t op_code = 0x00;
-    if(bufferNumber == 1) op_code = 0x84;
-    else if(bufferNumber == 2) op_code = 0x87;
-    else return 0;
-    
-    Select();
-    SendCommand(op_code);
-    SendAddress(MakeAddress(pageIndex, byteAddress));
-    
-    uint16_t i = 0;
-    for( ; i < count; i++)
-    {
-        spi->transfer(data[i]);
-    }
-    
-    Deselect();
-    
-    return i;
-}
-
-uint8_t FlashAT45DB321E::WriteBufferToPage(uint8_t bufferNumber, uint32_t pageIndex, bool erase)
+uint8_t FlashAT45DB321E::WriteBufferToPage(uint8_t bufferNumber, uint32_t pageAddr, bool erase)
 {
     //with erase:       83h for Buffer 1 or 86h for Buffer 2
     //without erase:    88h for Buffer 1 or 89h for Buffer 2
@@ -167,7 +105,7 @@ uint8_t FlashAT45DB321E::WriteBufferToPage(uint8_t bufferNumber, uint32_t pageIn
     
     Select();
     SendCommand(op_code);
-    SendAddress(MakeAddress(pageIndex));
+    SendAddress(pageAddr);
     Deselect();
     
     return 1;
@@ -180,7 +118,7 @@ uint8_t FlashAT45DB321E::WriteBufferToPage(uint8_t bufferNumber, uint32_t pageIn
  *
  * it's up to the user to declare data to be the correct size
  */
-uint32_t FlashAT45DB321E::ReadData(uint32_t address, uint8_t* data, uint32_t count)
+uint32_t FlashAT45DB321E::ReadBytes(uint32_t address, uint8_t* data, uint32_t count)
 {
     if(address >= byteCount) return 0; //basic check for address range
     
@@ -201,26 +139,31 @@ uint32_t FlashAT45DB321E::ReadData(uint32_t address, uint8_t* data, uint32_t cou
 }
 
 //Write() allows the user to just write a stream of data without concerns for the underlying structure
-uint32_t FlashAT45DB321E::Write(uint8_t* data, uint16_t size)
+uint32_t FlashAT45DB321E::Write(uint32_t address, const BufferArray& data)
 {
+    uint16_t currBufferIndex = address & 0x1ff; //start byte within the buffer
+    uint32_t bytesWritten = 0;
+    
     //84h for Buffer 1 or 87h for Buffer 2
     uint8_t op_code = 0x84; //defaults to buffer 1
     if(currBuffer == 2) op_code = 0x87;
     
     Select();
     SendCommand(op_code);
-    SendAddress(MakeAddress(0x00, byteAddress)); //writing to buffer, page address is irrelevant
+    SendAddress(address); //writing to buffer, page address is irrelevant, but byte within buffer is important
 
     uint16_t i = 0;
-    while(i < size)
+    while(i < data.GetSize())
     {
         spi->transfer(data[i++]);
+        bytesWritten++;
         
         if(++currBufferIndex == bytesPerPage) //if buffer is full, write the buffer and switch to other one
         {
             Deselect();
             
-            WriteBufferToPage(currBuffer, currPageIndex, false); //assumes already erased!!!
+            WriteBufferToPage(currBuffer, address, false); //assumes already erased; ignores byte address part of address
+            //currAddress += bytesPerPage;
             
             if(currBuffer == 1)
             {
@@ -234,17 +177,18 @@ uint32_t FlashAT45DB321E::Write(uint8_t* data, uint16_t size)
             }
 
             //pick up with the other buffer (can be done while the one is writing)
-            currBufferIndex = 0;
-            
             Select();
             SendCommand(op_code);
-            SendAddress(MakeAddress(0x00, byteAddress)); //writing to buffer, page address is irrelevant
+            SendAddress(0x0); //writing to start of buffer, page address is irrelevant
+            
+            currBufferIndex = 0;
         }
     }
     
     Deselect(); //this won't write the buffer to flash: could lose the last page of data
+    
+    return bytesWritten;
 }
-
 
 uint8_t FlashAT45DB321E::EraseBlock(uint32_t address, uint8_t sizeCmd)
 {
@@ -271,3 +215,52 @@ uint8_t FlashAT45DB321E::EraseSector(uint32_t address)
     return EraseBlock(address, CMD_ERASE_SECTOR);
     
 }
+
+
+
+//uint32_t FlashAT45DB321E::BufferWrite(uint8_t* data, uint16_t count, uint8_t bufferNumber, uint16_t byteAddress)
+//{
+//    //84h for Buffer 1 or 87h for Buffer 2
+//    uint8_t op_code = 0x00;
+//    if(bufferNumber == 1) op_code = 0x84;
+//    else if(bufferNumber == 2) op_code = 0x87;
+//    else return 0;
+//
+//    Select();
+//    SendCommand(op_code);
+//    SendAddress(MakeAddress(0x00, byteAddress)); //writing to buffer, page address is irrelevant
+//
+//    uint16_t i = 0;
+//    for( ; i < count; i++)
+//    {
+//        spi->transfer(data[i]);
+//    }
+//
+//    Deselect();
+//
+//    return i;
+//}
+
+//uint32_t FlashAT45DB321E::WriteThruBuffer(uint8_t* data, uint16_t count, uint8_t bufferNumber,
+//                                          uint16_t pageIndex, uint16_t byteAddress)
+//{
+//    //84h for Buffer 1 or 87h for Buffer 2
+//    uint8_t op_code = 0x00;
+//    if(bufferNumber == 1) op_code = 0x84;
+//    else if(bufferNumber == 2) op_code = 0x87;
+//    else return 0;
+//
+//    Select();
+//    SendCommand(op_code);
+//    SendAddress(MakeAddress(pageIndex, byteAddress));
+//
+//    uint16_t i = 0;
+//    for( ; i < count; i++)
+//    {
+//        spi->transfer(data[i]);
+//    }
+//
+//    Deselect();
+//
+//    return i;
+//}
