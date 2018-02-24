@@ -216,6 +216,30 @@ uint8_t FlashAT45DB321E::EraseSector(uint32_t address)
     
 }
 
+//WriteBytes() allows the user to write specific bytes as if it were EEPROM
+uint32_t FlashAT45DB321E::WriteBytes(uint32_t address, const BufferArray& data)
+{
+    if(address & 0x1ff + data.GetSize() > bytesPerPage) return 0; //don't overrun page
+    uint32_t bytesWritten = 0;
+    
+    //58h for Buffer 1 or 59h for Buffer 2
+    uint8_t op_code = 0x58; //defaults to buffer 1
+    if(currBuffer == 1) op_code = 0x59; //use the one that's not current!
+    
+    Select();
+    SendCommand(op_code);
+    SendAddress(address); //writing to buffer,
+    
+    while(i < data.GetSize())
+    {
+        spi->transfer(data[i++]);
+        bytesWritten++;
+    }
+    
+    Deselect(); //commit
+    
+    return bytesWritten;
+}
 
 
 //uint32_t FlashAT45DB321E::BufferWrite(uint8_t* data, uint16_t count, uint8_t bufferNumber, uint16_t byteAddress)
