@@ -9,21 +9,25 @@
 
 uint16_t FlashStoreManager::ReadStoresFromFlash(void)
 {
+    if(!flash) return 0;
+
     storeList.Flush();
     
     //read the FAT
     uint16_t maxStores = flash->bytesPerBlock / 8;
+    //SerialUSB.println(flash->bytesPerBlock);
+    
     for(uint16_t index = 0; index < maxStores; index++)
     {
         //get start address
         BufferArray fileInfo(8);
         flash->ReadBytes(index * 8, &fileInfo[0], fileInfo.GetSize());
         
-        uint32_t start = -1;
-        memcpy(&fileInfo[0], &start, 4);
+        uint32_t start = 0;
+        memcpy(&start, &fileInfo[0], 4);
         
-        uint32_t end = -1;
-        memcpy(&fileInfo[4], &end, 4);
+        uint32_t end = 0;
+        memcpy(&end, &fileInfo[4], 4);
         
         if(start != 0xffffffff)
         {
@@ -37,14 +41,27 @@ uint16_t FlashStoreManager::ReadStoresFromFlash(void)
 uint32_t FlashStoreManager::Select(uint16_t storeNumber)
 {
     currStore = storeList.Find(Datastore(storeNumber));
-    if(currStore) return currStore->endAddress - currStore->firstAddress; //available size
+    if(currStore) return currStore->endAddress - currStore->startAddress; //available size
     else return 0;
 }
 
 uint32_t FlashStoreManager::Write(const BufferArray& buffer)
 {
-    //Datastore* store = storeList.Find(Datastore(storeNumber));
-    if(!currStore) return 0;
+    if(!currStore)
+    {
+        SerialUSB.println("No open store");
+        return 0;
+    }
+    
+    if(currStore->currAddress + buffer.GetSize() > currStore->endAddress + 1)
+    {
+        SerialUSB.print(currStore->currAddress);
+        SerialUSB.print('\t');
+        SerialUSB.println("Overrun!");
+        return 0;
+    }
+    
+    SerialUSB.println(currStore->currAddress);
     
     uint32_t byteCount = flash->Write(currStore->currAddress, buffer); //somewhere needs to check for overrun...
     currStore->currAddress += byteCount;
@@ -65,11 +82,50 @@ uint32_t FlashStoreManager::DeleteStore(uint16_t storeNumber)
     deletedByteCount = flash->Erase(store->startAddress, store->size);
     BufferArray storeInfo(8);
     for(uint8_t i = 0; i < 8; i++) storeInfo[i] = 0xff;
-    flash->Write(storeNumber * 8, storeInfo);
+    flash->WriteBytes(storeNumber * 8, storeInfo);
 
     ReadStoresFromFlash();
     
     return deletedByteCount;
+}
+
+uint32_t FlashStoreManager::RewindStore(uint16_t storeNum)
+{
+    Datastore* store = storeList.Find(Datastore(storeNum));
+    if(!store)
+    {
+        SerialUSB.println("Can't find store.");
+        return 0;
+    }
+    
+    return store->Rewind();
+}
+
+uint32_t FlashStoreManager::CloseStore(uint16_t storeNum)
+{
+    Datastore* store = storeList.Find(Datastore(storeNum));
+    if(!store)
+    {
+        SerialUSB.println("Can't find store.");
+        return 0;
+    }
+    
+    uint32_t currSize = store->currAddress - store->startAddress;
+    
+    //make currSize integral number of blocks
+    uint16_t blocks = currSize / flash->bytesPerBlock;
+    if(currSize % flash->bytesPerBlock) blocks++;
+    currSize = blocks * flash->bytesPerBlock;
+    
+    store->Resize(currSize);
+    store->currAddress = store->endAddress + 1; //move to the end to avoid overwrites...
+    
+    BufferArray storeInfo(8);
+    memcpy(&storeInfo[0], &store->startAddress, 4);
+    memcpy(&storeInfo[4], &store->endAddress, 4);
+    flash->WriteBytes(storeNum * 8, storeInfo);
+    
+    return Select(storeNum);
 }
 
 uint32_t FlashStoreManager::CreateStore(uint16_t fileNum, uint32_t sizeReq)
@@ -98,18 +154,39 @@ uint32_t FlashStoreManager::CreateStore(uint16_t fileNum, uint32_t sizeReq)
     
     if((flash->byteCount - firstFreeMem) < sizeReq) return 0; //could be made a lot smarter...
     
+    //SerialUSB.println(firstFreeMem);
+    
     //if we've made it this far, we can make a store
     //create the FAT entry
-    Datastore newStore(fileNum, firstFreeMem, firstFreeMem + sizeReq);
+    Datastore newStore(fileNum, firstFreeMem, firstFreeMem + sizeReq - 1);
+    newStore.Rewind();
+    
     storeList.Add(newStore);
 
     BufferArray storeInfo(8);
     memcpy(&storeInfo[0], &newStore.startAddress, 4);
     memcpy(&storeInfo[4], &newStore.endAddress, 4);
-    flash->Write(fileNum * 8, storeInfo);
+    flash->WriteBytes(fileNum * 8, storeInfo);
+    
+    //SerialUSB.println(newStore.startAddress);
     
     //erase the relevant memory
     flash->Erase(newStore.startAddress, sizeReq);
     
     return Select(fileNum);
+}
+
+uint32_t FlashStoreManager::ReadBytes(uint16_t storeNum, BufferArray& buffer)
+{
+    Datastore* store = storeList.Find(Datastore(storeNum));
+    if(!store) return 0;
+    
+    if(store->currAddress > store->endAddress) return 0; //should really check if buffer is longer than remaining bytes...
+    
+    uint32_t bytes = flash->ReadBytes(store->currAddress, &buffer[0], buffer.GetSize());
+    store->currAddress += bytes;
+    
+    //SerialUSB.println(store->currAddress);
+    
+    return bytes;    
 }

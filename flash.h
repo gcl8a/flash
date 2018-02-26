@@ -44,7 +44,7 @@ public:
     Flash(void) {}
     Flash(SPIClass* _spi, uint8_t cs) : spi(_spi), chipSelect(cs) {}
     
-    void Init(void)
+    virtual IDdata Init(void)
     {
         pinMode(chipSelect, OUTPUT);        
         Deselect();
@@ -52,9 +52,13 @@ public:
         //this might not play well with others...
         spi->setDataMode(SPI_MODE0);
         spi->setBitOrder(MSBFIRST);
-        spi->setClockDivider(SPI_CLOCK_DIV4); //SAMD21 is too fast? or maybe I need better wiring
+        spi->setClockDivider(SPI_CLOCK_DIV16); //SAMD21 is too fast? or maybe I need better wiring
         
         spi->begin();
+        
+        SerialUSB.println(idData.manufacturerID, HEX);
+
+        return idData;
     }
 
     void Select(void) { digitalWrite(chipSelect, LOW); }
@@ -67,8 +71,22 @@ public:
     
     virtual uint32_t Write(uint32_t, const BufferArray&); //= 0;
     virtual uint32_t ReadBytes(uint32_t address, uint8_t* data, uint32_t count);
-    
-    uint32_t Erase(uint32_t addr, uint32_t size);
+    virtual uint32_t WriteBytes(uint32_t address, const BufferArray& data);
+
+    uint32_t Erase(uint32_t addr, uint32_t size)
+    {
+        uint32_t erasedBytes = 0;
+        while(erasedBytes < size)
+        {
+            uint32_t bytes = EraseBlock(addr + erasedBytes);
+            erasedBytes += bytes;
+            if(bytes == 0) return erasedBytes; //came up short
+        }
+        
+        return erasedBytes;
+    }
+
+    virtual uint32_t EraseBlock(uint32_t) {return 0;}
 
     friend class FlashStoreManager;
 };
@@ -152,11 +170,14 @@ public:
     uint32_t BufferWrite(uint8_t* data, uint16_t count, uint8_t bufferNumber, uint16_t byteAddress);
     uint8_t WriteBufferToPage(uint8_t bufferNumber, uint32_t pageIndex, bool erase = false);
 
-    uint32_t EraseBlock(uint32_t address) {return EraseBlock4K(address);}
-    
     uint8_t EraseBlock(uint32_t, uint8_t);
-    uint8_t EraseBlock4K(uint32_t address);
-    uint8_t EraseSector(uint32_t address);
+
+    uint32_t EraseBlock(uint32_t address) {return EraseBlock4K(address);}
+    uint32_t EraseBlock4K(uint32_t address);
+
+    //uint8_t EraseSector(uint32_t address);
+
+    uint32_t WriteBytes(uint32_t address, const BufferArray& data);
 
     /////////unused?
 //    uint32_t WriteThruBuffer(uint8_t* data, uint16_t count, uint8_t bufferNumber,

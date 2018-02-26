@@ -31,6 +31,7 @@ IDdata FlashAT45DB321E::Init(void)
     
     //check it's an Adesto
     if(idData.manufacturerID != 0x1F) SerialUSB.print("Wrong manufacturer!");
+    SerialUSB.println(idData.manufacturerID, HEX);
     
     //check AT45D series
     if((idData.deviceID1 & 0xE0) != 0x20) SerialUSB.print("Wrong chip family!");
@@ -122,6 +123,8 @@ uint32_t FlashAT45DB321E::ReadBytes(uint32_t address, uint8_t* data, uint32_t co
 {
     if(address >= byteCount) return 0; //basic check for address range
     
+    while(IsBusy()) {}
+    
     Select();
     SendCommand(CMD_READ_DATA);
     SendAddress(address);
@@ -204,32 +207,34 @@ uint8_t FlashAT45DB321E::EraseBlock(uint32_t address, uint8_t sizeCmd)
     return 1;
 }
 
-uint8_t FlashAT45DB321E::EraseBlock4K(uint32_t address)
+uint32_t FlashAT45DB321E::EraseBlock4K(uint32_t address)
 {
-    return EraseBlock(address, CMD_ERASE_BLOCK_4K);
-    
+    if(EraseBlock(address, CMD_ERASE_BLOCK_4K)) return bytesPerBlock;
+    else return 0;
 }
 
-uint8_t FlashAT45DB321E::EraseSector(uint32_t address)
-{
-    return EraseBlock(address, CMD_ERASE_SECTOR);
-    
-}
+//uint8_t FlashAT45DB321E::EraseSector(uint32_t address)
+//{
+//    return EraseBlock(address, CMD_ERASE_SECTOR);
+//}
 
 //WriteBytes() allows the user to write specific bytes as if it were EEPROM
 uint32_t FlashAT45DB321E::WriteBytes(uint32_t address, const BufferArray& data)
 {
-    if(address & 0x1ff + data.GetSize() > bytesPerPage) return 0; //don't overrun page
+    if((address & 0x1ff) + data.GetSize() > bytesPerPage) return 0; //don't overrun page
     uint32_t bytesWritten = 0;
     
     //58h for Buffer 1 or 59h for Buffer 2
     uint8_t op_code = 0x58; //defaults to buffer 1
     if(currBuffer == 1) op_code = 0x59; //use the one that's not current!
     
+    while(IsBusy()) {SerialUSB.println("busy");}
+    
     Select();
     SendCommand(op_code);
     SendAddress(address); //writing to buffer,
     
+    uint16_t i = 0;
     while(i < data.GetSize())
     {
         spi->transfer(data[i++]);
@@ -265,26 +270,3 @@ uint32_t FlashAT45DB321E::WriteBytes(uint32_t address, const BufferArray& data)
 //    return i;
 //}
 
-//uint32_t FlashAT45DB321E::WriteThruBuffer(uint8_t* data, uint16_t count, uint8_t bufferNumber,
-//                                          uint16_t pageIndex, uint16_t byteAddress)
-//{
-//    //84h for Buffer 1 or 87h for Buffer 2
-//    uint8_t op_code = 0x00;
-//    if(bufferNumber == 1) op_code = 0x84;
-//    else if(bufferNumber == 2) op_code = 0x87;
-//    else return 0;
-//
-//    Select();
-//    SendCommand(op_code);
-//    SendAddress(MakeAddress(pageIndex, byteAddress));
-//
-//    uint16_t i = 0;
-//    for( ; i < count; i++)
-//    {
-//        spi->transfer(data[i]);
-//    }
-//
-//    Deselect();
-//
-//    return i;
-//}
