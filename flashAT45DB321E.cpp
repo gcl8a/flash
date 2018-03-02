@@ -1,6 +1,5 @@
 //
-//  flash.cpp
-//  flash
+//  flashAT45DB321E.cpp
 //
 //  Created by Gregory C Lewin on 12/26/17.
 //  Copyright © 2017 Gregory C Lewin. All rights reserved.
@@ -213,12 +212,8 @@ uint32_t FlashAT45DB321E::EraseBlock4K(uint32_t address)
     else return 0;
 }
 
-//uint8_t FlashAT45DB321E::EraseSector(uint32_t address)
-//{
-//    return EraseBlock(address, CMD_ERASE_SECTOR);
-//}
-
 //WriteBytes() allows the user to write specific bytes as if it were EEPROM
+//use it sparingly...
 uint32_t FlashAT45DB321E::WriteBytes(uint32_t address, const BufferArray& data)
 {
     if((address & 0x1ff) + data.GetSize() > bytesPerPage) return 0; //don't overrun page

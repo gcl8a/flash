@@ -52,8 +52,9 @@ uint32_t FlashStoreManager::OpenStore(uint16_t storeNumber, uint32_t sizeReq)
     currStore = storeList.Find(Datastore(storeNumber));
     if(currStore) return currStore->endAddress + 1 - currStore->startAddress; //need to add ability to resize...
     
-    //didn't find it, so create new one
-    return CreateStore(storeNumber, sizeReq);
+    //didn't find it, so create new one if sizeReq > 0 (otherwise, we're just selecting)
+    if(sizeReq) return CreateStore(storeNumber, sizeReq);
+    else return 0;
 }
 
 uint32_t FlashStoreManager::CreateStore(uint16_t fileNum, uint32_t sizeReq)
@@ -209,6 +210,9 @@ uint32_t FlashStoreManager::Write(const BufferArray& buffer)
     uint32_t byteCount = flash->Write(currStore->endAddress + 1, buffer);
     currStore->endAddress += byteCount; //should do some error checking/handling
     
+    //note that if we're using a flash with a buffer, there needs to be some cleaning up: there
+    //are bytes in the buffer that haven't been written to the NVM
+    
     return byteCount;
 }
 
@@ -221,7 +225,7 @@ uint32_t FlashStoreManager::Read(BufferArray& buffer)
     uint32_t bytes = flash->ReadBytes(currStore->currAddress, &buffer[0], buffer.GetSize());
     currStore->currAddress += bytes;
     
-    //SerialUSB.println(store->currAddress);
+    SerialUSB.println(currStore->currAddress);
     
     return bytes;
 }
