@@ -61,6 +61,8 @@ public:
         return idData;
     }
 
+    uint32_t GetBytesPerBlock(void) { return bytesPerBlock; }
+    
     void Select(void) { digitalWrite(chipSelect, LOW); }
     void Deselect(void) { digitalWrite(chipSelect, HIGH); }
     
